@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"go.bug.st/serial"
@@ -43,6 +44,20 @@ func main() {
 	fmt.Printf("Connected to serial port: %s\n", portName)
 
 	writer := bufio.NewWriter(port)
+	reader := bufio.NewScanner(port)
+
+	go func() {
+		for reader.Scan() {
+			line := reader.Text()
+			fmt.Println("Received from device:", line)
+			if strings.TrimSpace(line) == "SYNC_REQUEST" {
+				response := fmt.Sprintf("NOW:%s\n", time.Now().Format("15:04:05"))
+				writer.WriteString(response)
+				writer.Flush()
+				fmt.Println("Responded with time sync:", response)
+			}
+		}
+	}()
 
 	for {
 		dataItems := []string{
@@ -59,9 +74,9 @@ func main() {
 				log.Printf("Failed to write to serial port: %v", err)
 			}
 			writer.Flush()
-			time.Sleep(200 * time.Millisecond) // 间隔稍短，避免数据堆积
+			time.Sleep(200 * time.Millisecond)
 		}
 
-		time.Sleep(time.Second)
+		time.Sleep(1 * time.Second)
 	}
 }

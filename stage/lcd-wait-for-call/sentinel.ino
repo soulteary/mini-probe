@@ -3,42 +3,42 @@
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-const char* headers[5] = {
-  "UPTIME",
-  "RAM",
-  "NET(U/D)",
-  "DISK(R/W)",
-  "NOW"
-};
+const char* headers[5] = { "UPTIME", "RAM", "NET(U/D)", "DISK(R/W)", "NOW" };
+char contents[5][64] = { "waiting...", "waiting...", "waiting...", "waiting...", "00:00:00" };
+char tempContents[5][64];  // 临时缓冲区
+bool contentUpdated[5] = { false };
 
-String contents[5] = {
-  "waiting...",
-  "waiting...",
-  "waiting...",
-  "waiting...",
-  "00:00:00"
-};
-
-byte scrollPos[5] = { 0, 0, 0, 0, 0 };
+byte scrollPos[4] = { 0 };
 const byte lineLength = 20;
 const unsigned long scrollDelay = 300;
-const unsigned long displayInterval = 2000; // 2秒切换间隔
+const unsigned long displayInterval = 2000;
 unsigned long previousMillis = 0;
 unsigned long lastSwitchMillis = 0;
 unsigned long lastTimeUpdateMillis = 0;
-const unsigned long timeUpdateInterval = 1000;  // 1秒
+unsigned long lastSyncRequestMillis = 0;
+const unsigned long timeUpdateInterval = 1000;
+const unsigned long timeSyncInterval = 10000;
 byte currentDisplay = 0;
 
 unsigned long internalTimeMillis = 0;
 unsigned long lastInternalMillis = 0;
 
+void safeLCDPrint(byte col, byte row, const char* msg) {
+  lcd.setCursor(col, row);
+  char buffer[21];
+  snprintf(buffer, 21, "%-20s", msg);
+  lcd.print(buffer);
+}
+
 void setup() {
   lcd.init();
   lcd.backlight();
-  Serial.begin(115200);
   lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("=[Mini Probe]= v0.1");
+  delay(300);
+  Serial.begin(115200);
+  safeLCDPrint(0, 0, "=[Mini Probe]= v0.1");
+  lastInternalMillis = millis();
+  memcpy(tempContents, contents, sizeof(contents));
 }
 
 void updateInternalTime() {
@@ -47,38 +47,49 @@ void updateInternalTime() {
   lastInternalMillis = currentMillis;
 
   unsigned long totalSeconds = internalTimeMillis / 1000;
-  unsigned int hours = (totalSeconds / 3600) % 24;
-  unsigned int minutes = (totalSeconds / 60) % 60;
-  unsigned int seconds = totalSeconds % 60;
-
-  char buf[9];
-  sprintf(buf, "%02u:%02u:%02u", hours, minutes, seconds);
-  contents[4] = String(buf);
+  snprintf(contents[4], sizeof(contents[4]), "%02lu:%02lu:%02lu",
+           (totalSeconds / 3600) % 24, (totalSeconds / 60) % 60, totalSeconds % 60);
 }
 
-void loop() {
-  unsigned long currentMillis = millis();
+void requestTimeSync() {
+  Serial.println("SYNC_REQUEST");
+}
 
-  if (Serial.available() > 0) {
-    String received = Serial.readStringUntil('\n');
-    received.trim();
-    int sepIndex = received.indexOf(':');
+void processSerial() {
+  if (Serial.available()) {
+    char buffer[80] = { 0 };
+    size_t len = Serial.readBytesUntil('\n', buffer, sizeof(buffer) - 1);
+    buffer[len] = '\0';
 
-    if (sepIndex > 0) {
-      String header = received.substring(0, sepIndex);
-      String data = received.substring(sepIndex + 1);
-      header.trim();
-      data.trim();
+    char* sep = strchr(buffer, ':');
+    if (sep != nullptr) {
+      *sep = '\0';
+      char* header = buffer;
+      char* data = sep + 1;
+
+      while (*header == ' ') header++;
+      while (*data == ' ') data++;
+
+      char* end;
+      end = header + strlen(header) - 1;
+      while (end > header && isspace(*end)) *(end--) = '\0';
+
+      end = data + strlen(data) - 1;
+      while (end > data && isspace(*end)) *(end--) = '\0';
 
       for (byte i = 0; i < 5; i++) {
-        if (header.equalsIgnoreCase(headers[i])) {
-          contents[i] = data;
-          scrollPos[i] = 0;
-          if (i == 4) { // NOW received, update internal time
+        if (strcasecmp(header, headers[i]) == 0) {
+          strncpy(tempContents[i], data, sizeof(tempContents[i]) - 1);
+          tempContents[i][sizeof(tempContents[i]) - 1] = '\0';
+          contentUpdated[i] = true;
+
+          if (i == 4) {  // 立即更新时间
             int h, m, s;
-            if (sscanf(data.c_str(), "%d:%d:%d", &h, &m, &s) == 3) {
+            if (sscanf(data, "%d:%d:%d", &h, &m, &s) == 3) {
               internalTimeMillis = ((unsigned long)h * 3600UL + m * 60UL + s) * 1000UL;
-              lastInternalMillis = currentMillis;
+              lastInternalMillis = millis();
+              strncpy(contents[4], tempContents[4], sizeof(contents[4]));
+              contentUpdated[4] = false;
             }
           }
           break;
@@ -86,53 +97,64 @@ void loop() {
       }
     }
   }
+}
 
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  processSerial();
   updateInternalTime();
 
-  // 每2秒切换显示内容，排除NOW（最后一项）
+  if (currentMillis - lastSyncRequestMillis >= timeSyncInterval) {
+    lastSyncRequestMillis = currentMillis;
+    requestTimeSync();
+  }
+
   if (currentMillis - lastSwitchMillis >= displayInterval) {
     lastSwitchMillis = currentMillis;
     currentDisplay = (currentDisplay + 1) % 4;
 
-    lcd.setCursor(0, 1);
-    lcd.print("                    "); // 清除上一标题
-    lcd.setCursor(0, 1);
-    lcd.print(headers[currentDisplay]);
-    lcd.print(":");
+    if (currentDisplay == 0) {  // 完整显示一轮后才更新内容
+      for (byte i = 0; i < 4; i++) {
+        if (contentUpdated[i]) {
+          strncpy(contents[i], tempContents[i], sizeof(contents[i]));
+          contentUpdated[i] = false;
+        }
+      }
+    }
 
-    scrollPos[currentDisplay] = 0; // Reset scroll position each cycle
+    char headerLine[21];
+    snprintf(headerLine, 21, "%s:", headers[currentDisplay]);
+    safeLCDPrint(0, 1, headerLine);
 
-    lcd.setCursor(0, 2);
-    lcd.print("                    "); // 清除上一内容
+    scrollPos[currentDisplay] = 0;
   }
 
-  // 滚动显示内容
   if (currentMillis - previousMillis >= scrollDelay) {
     previousMillis = currentMillis;
 
-    lcd.setCursor(0, 2);
+    char* content = contents[currentDisplay];
+    byte contentLen = strlen(content);
+    char displayBuffer[21];
 
-    byte contentLen = contents[currentDisplay].length();
-    if (contentLen > lineLength) {
-      for (byte j = 0; j < lineLength; j++) {
-        byte charIndex = (scrollPos[currentDisplay] + j) % contentLen;
-        lcd.print(contents[currentDisplay][charIndex]);
-      }
-      scrollPos[currentDisplay] = (scrollPos[currentDisplay] + 1) % contentLen;
+    if (contentLen <= lineLength) {
+      snprintf(displayBuffer, 21, "%-20s", content);
     } else {
-      lcd.print(contents[currentDisplay]);
-      for (byte j = contentLen; j < lineLength; j++) {
-        lcd.print(" ");
+      for (byte i = 0; i < lineLength; i++) {
+        displayBuffer[i] = content[(scrollPos[currentDisplay] + i) % contentLen];
       }
+      displayBuffer[lineLength] = '\0';
+      scrollPos[currentDisplay] = (scrollPos[currentDisplay] + 1) % contentLen;
     }
+
+    safeLCDPrint(0, 2, displayBuffer);
   }
 
-  // 每秒刷新NOW时间显示
   if (currentMillis - lastTimeUpdateMillis >= timeUpdateInterval) {
     lastTimeUpdateMillis = currentMillis;
-    lcd.setCursor(0, 3);
-    lcd.print("                    "); // 清除上一内容
-    lcd.setCursor(20 - contents[4].length(), 3);
-    lcd.print(contents[4]);
+    char timeBuffer[21];
+    snprintf(timeBuffer, 21, "%20s", contents[4]);
+    safeLCDPrint(0, 3, timeBuffer);
   }
 }

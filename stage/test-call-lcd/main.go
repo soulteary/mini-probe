@@ -45,22 +45,23 @@ func main() {
 	writer := bufio.NewWriter(port)
 
 	for {
-		timeStr := fmt.Sprintf("UPTIME:%s\n", time.Now().Format("15:04:05"))
-		writer.WriteString(timeStr)
-		writer.Flush()
+		dataItems := []string{
+			fmt.Sprintf("UPTIME:%s\n", "10days"),
+			"RAM:76% (18.2GB/24GB)\n",
+			"NET(U/D):102.5GB / 174.8GB\n",
+			"DISK(R/W):3.2TB / 972.4GB\n",
+			fmt.Sprintf("NOW:%s\n", time.Now().Format("15:04:05")),
+		}
 
-		ramStr := "RAM:76% (18.2GB/24GB)\n"
-		writer.WriteString(ramStr)
-		writer.Flush()
+		for _, item := range dataItems {
+			_, err := writer.WriteString(item)
+			if err != nil {
+				log.Printf("Failed to write to serial port: %v", err)
+			}
+			writer.Flush()
+			time.Sleep(200 * time.Millisecond) // 间隔稍短，避免数据堆积
+		}
 
-		netStr := "NET(U/D):102.5GB / 174.8GB\n"
-		writer.WriteString(netStr)
-		writer.Flush()
-
-		diskStr := "DISK(R/W):3.2TB / 972.4GB\n"
-		writer.WriteString(diskStr)
-		writer.Flush()
-
-		time.Sleep(5 * time.Second)
+		time.Sleep(time.Second)
 	}
 }

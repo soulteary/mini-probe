@@ -1,5 +1,7 @@
 # Mini Probe
 
+[中文文档](./README_zhCN.md)
+
 ![](./mini-probe.jpg)
 
 mini-probe is an open-source project designed to display real-time operational status of home devices (e.g., NAS) on an electronic screen, making it easy to visualize critical information even for headless devices.

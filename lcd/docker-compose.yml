@@ -1,0 +1,8 @@
+name: mini-probe
+services:
+  mini-probe:
+    devices:
+      - /dev/ttyUSB0
+    # build the image from the Dockerfile first
+    # docker build -t soulteary/mini-probe .
+    image: soulteary/mini-probe
